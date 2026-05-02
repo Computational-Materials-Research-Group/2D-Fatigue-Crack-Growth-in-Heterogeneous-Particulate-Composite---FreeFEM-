@@ -1,0 +1,414 @@
+// ============================================================
+// 2D Fatigue Crack Growth - CRACK GAUNTLET INTERACTION
+// FreeFEM++ : Heterogeneous Particulate Composite
+
+
+load "iovtk"
+
+// ============================================================
+// NEW OUTPUT DIRECTORY
+// ============================================================
+string outdir = "D:\\freefem++\\crack_gauntlet\\";
+system("mkdir \"D:\\freefem++\\crack_gauntlet\"");
+
+// ============================================================
+// PLATE GEOMETRY
+// ============================================================
+real Lx   = 0.200;
+real Ly   = 0.200;
+real xc   = Lx / 2.;
+real yc   = Ly / 2.;
+real a0   = 0.005;
+real b0   = 0.005;
+real bMin = 0.0005;
+real a = a0;
+real b = b0;
+
+// ============================================================
+// PARTICLE POSITIONS AND RADII  (NO underscores in names)
+// ============================================================
+
+// Gauntlet pair radius (7 mm)
+real rpP  = 0.007;
+real rp2P = rpP*rpP;
+
+// Pair 1: crack tip reaches x=115mm at a=15mm
+real xP1a = 0.115; real yP1a = 0.113;   // ABOVE crack  (bottom edge y=106mm, gap=6mm)
+real xP1b = 0.115; real yP1b = 0.087;   // BELOW crack  (top   edge y=094mm, gap=6mm)
+
+// Pair 2: crack tip approaches x=132mm near fracture (a~27mm)
+real xP2a = 0.133; real yP2a = 0.115;   // ABOVE (bottom edge y=108mm, gap=8mm)
+real xP2b = 0.133; real yP2b = 0.085;   // BELOW (top   edge y=092mm, gap=8mm)
+
+// Background radius (9 mm)
+real rpBg  = 0.009;
+real rp2Bg = rpBg*rpBg;
+
+real xB1=0.040; real yB1=0.040;
+real xB2=0.100; real yB2=0.022;
+real xB3=0.160; real yB3=0.040;
+real xB4=0.178; real yB4=0.100;
+real xB5=0.160; real yB5=0.160;
+real xB6=0.100; real yB6=0.178;
+real xB7=0.040; real yB7=0.160;
+real xB8=0.022; real yB8=0.100;
+
+// ============================================================
+// CONSTITUENT MATERIAL PROPERTIES
+// ============================================================
+real Em   = 68.9e9;   real num  = 0.330;   real sYm  = 280.e6;
+real Ep   = 410.e9;   real nup  = 0.190;   real sfp  = 3500.e6;
+real sdeb = 400.e6;
+real Vf = 0.20;
+real KIcInplane = 18.e6;
+
+// ============================================================
+// LOADING
+// ============================================================
+real sigmaMax = 60.e6;
+real sigmaMin =  6.e6;
+real Rratio   = sigmaMin / sigmaMax;
+real Dsigma   = sigmaMax - sigmaMin;
+
+// ============================================================
+// MORI-TANAKA for utop and KI calibration
+// ============================================================
+real MTKm    = Em  / (3.*(1.-2.*num));
+real MTGm    = Em  / (2.*(1.+num));
+real MTKp    = Ep  / (3.*(1.-2.*nup));
+real MTGp    = Ep  / (2.*(1.+nup));
+real MTKeff  = MTKm + Vf*(MTKp-MTKm) /
+               (1.+(1.-Vf)*(MTKp-MTKm)/(MTKm+4.*MTGm/3.));
+real MTbetaG = MTGm*(9.*MTKm+8.*MTGm) / (6.*(MTKm+2.*MTGm));
+real MTGeff  = MTGm + Vf*(MTGp-MTGm) /
+               (1.+(1.-Vf)*(MTGp-MTGm)/MTbetaG);
+real Eeff  = 9.*MTKeff*MTGeff / (3.*MTKeff+MTGeff);
+real nueff = (3.*MTKeff-2.*MTGeff) / (2.*(3.*MTKeff+MTGeff));
+real utop  = sigmaMax * Ly / Eeff;
+
+// ============================================================
+// PARIS LAW
+// ============================================================
+real Cparis = 2.e-8;
+real mparis = 3.5;
+real daCap  = 2.0;
+int  Nblock = 3000;
+int  Nsteps = 200;
+int  Nell   = 60;
+int  Ncirc  = 20;    // more segments per particle for smoother circles
+int  Nadapt = 2;
+
+// ============================================================
+// DAMAGE STATE
+// ============================================================
+real dm   = 0.;
+real dp   = 0.;
+real FIvm = 0.;
+real FIpf = 0.;
+real FIdeb= 0.;
+
+// ============================================================
+// BORDER DEFINITIONS
+// ============================================================
+border Rect1(t=0,Lx){ x=t;    y=0.;   label=1; }
+border Rect2(t=0,Ly){ x=Lx;   y=t;    label=2; }
+border Rect3(t=0,Lx){ x=Lx-t; y=Ly;   label=3; }
+border Rect4(t=0,Ly){ x=0.;   y=Ly-t; label=4; }
+border Notch(t=0,2*pi){
+    x = xc + a*cos(t);
+    y = yc + b*sin(t);
+    label = 5;
+}
+// Gauntlet pairs
+border BordP1a(t=0,2*pi){ x=xP1a+rpP*cos(t); y=yP1a+rpP*sin(t); label=10; }
+border BordP1b(t=0,2*pi){ x=xP1b+rpP*cos(t); y=yP1b+rpP*sin(t); label=10; }
+border BordP2a(t=0,2*pi){ x=xP2a+rpP*cos(t); y=yP2a+rpP*sin(t); label=10; }
+border BordP2b(t=0,2*pi){ x=xP2b+rpP*cos(t); y=yP2b+rpP*sin(t); label=10; }
+// Background
+border BordB1(t=0,2*pi){ x=xB1+rpBg*cos(t); y=yB1+rpBg*sin(t); label=10; }
+border BordB2(t=0,2*pi){ x=xB2+rpBg*cos(t); y=yB2+rpBg*sin(t); label=10; }
+border BordB3(t=0,2*pi){ x=xB3+rpBg*cos(t); y=yB3+rpBg*sin(t); label=10; }
+border BordB4(t=0,2*pi){ x=xB4+rpBg*cos(t); y=yB4+rpBg*sin(t); label=10; }
+border BordB5(t=0,2*pi){ x=xB5+rpBg*cos(t); y=yB5+rpBg*sin(t); label=10; }
+border BordB6(t=0,2*pi){ x=xB6+rpBg*cos(t); y=yB6+rpBg*sin(t); label=10; }
+border BordB7(t=0,2*pi){ x=xB7+rpBg*cos(t); y=yB7+rpBg*sin(t); label=10; }
+border BordB8(t=0,2*pi){ x=xB8+rpBg*cos(t); y=yB8+rpBg*sin(t); label=10; }
+
+// ============================================================
+// INITIAL MESH  (ALL particles included, none removed)
+// ============================================================
+mesh Th = buildmesh(
+    Rect1(80)+Rect2(80)+Rect3(80)+Rect4(80)
+    + Notch(-Nell)
+    + BordP1a(Ncirc)+BordP1b(Ncirc)
+    + BordP2a(Ncirc)+BordP2b(Ncirc)
+    + BordB1(Ncirc)+BordB2(Ncirc)+BordB3(Ncirc)+BordB4(Ncirc)
+    + BordB5(Ncirc)+BordB6(Ncirc)+BordB7(Ncirc)+BordB8(Ncirc)
+);
+
+fespace Vh2(Th, [P1,P1]);
+fespace Ph (Th,  P0);
+
+Vh2 [ux,uy],[vx,vy];
+Ph  sigVM, sigXX, sigYY, sigXY, sigHyd, sigma1;
+Ph  FImatrix, FIparticle, FIinterface, meshSz, matfield;
+
+// ============================================================
+// HISTORY ARRAYS
+// ============================================================
+real[int] ahist (Nsteps+1);
+real[int] KIhist(Nsteps+1);
+real[int] Nhist (Nsteps+1);
+ahist[0]=a;  KIhist[0]=0.;  Nhist[0]=0.;
+real Ntotal  = 0.;
+bool failed  = false;
+int  stepDone = 0;
+
+// ============================================================
+// SANITY CHECK
+// ============================================================
+cout << "================================================"  << endl;
+cout << " CRACK GAUNTLET - Particles ABOVE and BELOW crack" << endl;
+cout << " Pair1: (" << xP1a*1e3 << "," << yP1a*1e3
+     << ") and (" << xP1b*1e3 << "," << yP1b*1e3
+     << ") r=" << rpP*1e3 << "mm"                          << endl;
+cout << " Pair2: (" << xP2a*1e3 << "," << yP2a*1e3
+     << ") and (" << xP2b*1e3 << "," << yP2b*1e3
+     << ") r=" << rpP*1e3 << "mm"                          << endl;
+cout << " Min gap Pair1 to crack centerline = "
+     << (yP1a-rpP-yc)*1e3 << " mm"                         << endl;
+cout << " NO particles are removed during simulation"       << endl;
+cout << " Eeff(MT,20%) = " << Eeff/1e9 << " GPa"           << endl;
+cout << " KI_0 = " << sigmaMax*sqrt(pi*a0)/1e6
+     << " MPa.sqrtm  KIc=" << KIcInplane/1e6 << " MPa.sqrtm" << endl;
+cout << "================================================"  << endl;
+
+// ============================================================
+// PVD HEADER
+// ============================================================
+{
+    ofstream pvd(outdir + "crack_gauntlet.pvd");
+    pvd << "<?xml version='1.0'?>"                    << endl;
+    pvd << "<VTKFile type='Collection' version='0.1'>" << endl;
+    pvd << "<Collection>"                              << endl;
+}
+
+// ============================================================
+// MAIN FATIGUE LOOP
+// ============================================================
+for (int step = 0; step < Nsteps && !failed; step++) {
+
+    // ---- (1) MT effective E (degraded) ----
+    real Emdeg = Em*(1.-dm);
+    real Epdeg = Ep*(1.-dp);
+    {
+        real LKm    = Emdeg/(3.*(1.-2.*num));
+        real LGm    = Emdeg/(2.*(1.+num));
+        real LKp    = Epdeg/(3.*(1.-2.*nup));
+        real LGp    = Epdeg/(2.*(1.+nup));
+        real LKeff  = LKm + Vf*(LKp-LKm)/(1.+(1.-Vf)*(LKp-LKm)/(LKm+4.*LGm/3.));
+        real LbetaG = LGm*(9.*LKm+8.*LGm)/(6.*(LKm+2.*LGm));
+        real LGeff  = LGm + Vf*(LGp-LGm)/(1.+(1.-Vf)*(LGp-LGm)/LbetaG);
+        Eeff  = 9.*LKeff*LGeff/(3.*LKeff+LGeff);
+        nueff = (3.*LKeff-2.*LGeff)/(2.*(3.*LKeff+LGeff));
+    }
+    if (Eeff < 1.e8) { cout << "CATASTROPHIC DEGRADATION" << endl; failed=true; break; }
+    utop = sigmaMax * Ly / Eeff;
+
+    // ---- (2) Rebuild mesh  (ALL particles stay in mesh) ----
+    Th = buildmesh(
+        Rect1(80)+Rect2(80)+Rect3(80)+Rect4(80)
+        + Notch(-Nell)
+        + BordP1a(Ncirc)+BordP1b(Ncirc)
+        + BordP2a(Ncirc)+BordP2b(Ncirc)
+        + BordB1(Ncirc)+BordB2(Ncirc)+BordB3(Ncirc)+BordB4(Ncirc)
+        + BordB5(Ncirc)+BordB6(Ncirc)+BordB7(Ncirc)+BordB8(Ncirc)
+    );
+
+    // ---- (3) Adaptive heterogeneous elasticity solve ----
+    for (int iter = 0; iter < Nadapt; iter++) {
+
+        Ph matInd;
+        matInd =
+            ((x-xP1a)*(x-xP1a)+(y-yP1a)*(y-yP1a) <= rp2P ? 1. : 0.)
+          + ((x-xP1b)*(x-xP1b)+(y-yP1b)*(y-yP1b) <= rp2P ? 1. : 0.)
+          + ((x-xP2a)*(x-xP2a)+(y-yP2a)*(y-yP2a) <= rp2P ? 1. : 0.)
+          + ((x-xP2b)*(x-xP2b)+(y-yP2b)*(y-yP2b) <= rp2P ? 1. : 0.)
+          + ((x-xB1)*(x-xB1)+(y-yB1)*(y-yB1) <= rp2Bg ? 1. : 0.)
+          + ((x-xB2)*(x-xB2)+(y-yB2)*(y-yB2) <= rp2Bg ? 1. : 0.)
+          + ((x-xB3)*(x-xB3)+(y-yB3)*(y-yB3) <= rp2Bg ? 1. : 0.)
+          + ((x-xB4)*(x-xB4)+(y-yB4)*(y-yB4) <= rp2Bg ? 1. : 0.)
+          + ((x-xB5)*(x-xB5)+(y-yB5)*(y-yB5) <= rp2Bg ? 1. : 0.)
+          + ((x-xB6)*(x-xB6)+(y-yB6)*(y-yB6) <= rp2Bg ? 1. : 0.)
+          + ((x-xB7)*(x-xB7)+(y-yB7)*(y-yB7) <= rp2Bg ? 1. : 0.)
+          + ((x-xB8)*(x-xB8)+(y-yB8)*(y-yB8) <= rp2Bg ? 1. : 0.) ;
+        matInd = (matInd >= 0.5 ? 1. : 0.);
+
+        Ph Eph  = Emdeg + (Epdeg-Emdeg)*matInd;
+        Ph nuph = num   + (nup  -num  )*matInd;
+        Ph C11h = Eph / (1.-nuph*nuph);
+        Ph C12h = nuph*Eph / (1.-nuph*nuph);
+        Ph C22h = C11h;
+        Ph C66h = Eph / (2.*(1.+nuph));
+
+        ux[] = 0;
+        solve Elasticity([ux,uy],[vx,vy], solver=UMFPACK) =
+            int2d(Th)(
+                C11h * dx(ux)*dx(vx)
+              + C12h * dy(uy)*dx(vx)
+              + C12h * dx(ux)*dy(vy)
+              + C22h * dy(uy)*dy(vy)
+              + C66h * (dy(ux)+dx(uy))*(dy(vx)+dx(vy))
+            )
+            + on(1, uy=0.)
+            + on(4, ux=0.)
+            + on(3, uy=utop)
+            ;
+
+        if (iter < Nadapt-1)
+            Th = adaptmesh(Th, [ux,uy],
+                           err=0.005, nbvx=80000,
+                           hmax=Lx/8., hmin=max(b/10., 0.0008));  // FIX: cap hmin at 0.8mm
+    }
+
+    // ---- (4) Material field on final adapted mesh ----
+    matfield =
+        ((x-xP1a)*(x-xP1a)+(y-yP1a)*(y-yP1a) <= rp2P ? 1. : 0.)
+      + ((x-xP1b)*(x-xP1b)+(y-yP1b)*(y-yP1b) <= rp2P ? 1. : 0.)
+      + ((x-xP2a)*(x-xP2a)+(y-yP2a)*(y-yP2a) <= rp2P ? 1. : 0.)
+      + ((x-xP2b)*(x-xP2b)+(y-yP2b)*(y-yP2b) <= rp2P ? 1. : 0.)
+      + ((x-xB1)*(x-xB1)+(y-yB1)*(y-yB1) <= rp2Bg ? 1. : 0.)
+      + ((x-xB2)*(x-xB2)+(y-yB2)*(y-yB2) <= rp2Bg ? 1. : 0.)
+      + ((x-xB3)*(x-xB3)+(y-yB3)*(y-yB3) <= rp2Bg ? 1. : 0.)
+      + ((x-xB4)*(x-xB4)+(y-yB4)*(y-yB4) <= rp2Bg ? 1. : 0.)
+      + ((x-xB5)*(x-xB5)+(y-yB5)*(y-yB5) <= rp2Bg ? 1. : 0.)
+      + ((x-xB6)*(x-xB6)+(y-yB6)*(y-yB6) <= rp2Bg ? 1. : 0.)
+      + ((x-xB7)*(x-xB7)+(y-yB7)*(y-yB7) <= rp2Bg ? 1. : 0.)
+      + ((x-xB8)*(x-xB8)+(y-yB8)*(y-yB8) <= rp2Bg ? 1. : 0.) ;
+    matfield = (matfield >= 0.5 ? 1. : 0.);
+
+    // ---- (5) Stress post-processing ----
+    {
+        Ph Eph2  = Emdeg + (Epdeg-Emdeg)*matfield;
+        Ph nuph2 = num   + (nup  -num  )*matfield;
+        Ph C11f  = Eph2 / (1.-nuph2*nuph2);
+        Ph C12f  = nuph2*Eph2 / (1.-nuph2*nuph2);
+        Ph C22f  = C11f;
+        Ph C66f  = Eph2 / (2.*(1.+nuph2));
+        Ph exx = dx(ux); Ph eyy = dy(uy); Ph gxy = dy(ux)+dx(uy);
+        sigXX = C11f*exx + C12f*eyy;
+        sigYY = C12f*exx + C22f*eyy;
+        sigXY = C66f*gxy;
+        sigVM  = sqrt(sigXX*sigXX - sigXX*sigYY + sigYY*sigYY + 3.*sigXY*sigXY);
+        sigHyd = (sigXX+sigYY)/3.;
+    }
+    meshSz = hTriangle;
+    sigma1 = 0.5*(sigXX+sigYY) + sqrt(0.25*(sigXX-sigYY)^2 + sigXY^2);
+
+    // ---- (6) Phase-separated failure indices ----
+    FImatrix   = (sigVM  / sYm) * (1.-matfield);
+    FIparticle = (sigma1 / sfp) * matfield;
+    Ph sigHydPos;
+    sigHydPos   = (sigHyd + abs(sigHyd)) * 0.5;
+    FIinterface = sigHydPos / sdeb;
+
+    real areaPlate    = int2d(Th)(1.);
+    real areaMatrix   = int2d(Th)(1.-matfield);
+    real areaParticle = int2d(Th)(matfield);
+    FIvm  = int2d(Th)(sigVM/sYm  * (1.-matfield)) / max(areaMatrix,   1.e-20);
+    FIpf  = int2d(Th)(sigma1/sfp * matfield)       / max(areaParticle, 1.e-20);
+    FIdeb = int2d(Th)(FIinterface)                 / areaPlate;
+
+    // ---- (7) Progressive degradation ----
+    if (FIvm  > 0.25 && dm < 0.90) { dm=min(dm+0.05,0.90);
+        cout << "  Matrix damage dm=" << dm << " FIvm=" << FIvm << endl; }
+    if (FIpf  > 0.012 && dp < 0.90) { dp=min(dp+0.10,0.90);
+        cout << "  Particle fracture dp=" << dp << " FIpf=" << FIpf << endl; }
+    if (FIdeb > 0.035 && dm < 0.90) { dm=min(dm+0.03,0.90);
+        cout << "  Interface debond dm=" << dm << " FIdeb=" << FIdeb << endl; }
+
+    // ---- (8) SIF ----
+    real secarg = pi*a/Ly;
+    real Fcorr;
+    if (secarg < pi*0.49) Fcorr = sqrt(1./cos(secarg));
+    else                   Fcorr = sqrt(1./cos(pi*0.49));
+    real KImax    = sigmaMax*sqrt(pi*a)*Fcorr;
+    real DeltaK   = Dsigma  *sqrt(pi*a)*Fcorr;
+    real KImaxMPa = KImax /1.e6;
+    real DeltaKMPa= DeltaK/1.e6;
+
+    // ---- (9) Fracture check ----
+    if (KImax >= KIcInplane) {
+        cout << "FRACTURE: KImax=" << KImaxMPa << " >= KIc="
+             << KIcInplane/1.e6 << " step=" << step+1 << endl;
+        failed = true;
+    }
+
+    // ---- (10) Paris Law ----
+    real daMm = Cparis*pow(DeltaKMPa,mparis)*real(Nblock);
+    daMm = min(daMm, daCap);
+    daMm = max(daMm, 1.e-6);
+    real da = daMm*1.e-3;
+    real db = 0.05*da*(b/a);
+    a = a+da;
+    b = max(b-db, bMin);
+
+    Ntotal    = Ntotal + real(Nblock);
+    stepDone  = step + 1;
+    ahist [step+1] = a;
+    KIhist[step+1] = KImax;
+    Nhist [step+1] = Ntotal;
+
+    // Proximity indicator for console output
+    real gapP1 = sqrt((xc+a-xP1a)^2+(yc-yP1a)^2) - rpP;
+    real gapP2 = sqrt((xc+a-xP2a)^2+(yc-yP2a)^2) - rpP;
+    cout << "Step " << step+1 << "/" << Nsteps
+         << "  N="    << Ntotal
+         << "  a="    << a*1e3    << "mm"
+         << "  KI="   << KImaxMPa << "MPa.sqrtm"
+         << "  da="   << daMm    << "mm"
+         << "  FIvm=" << FIvm
+         << "  gapP1="<< gapP1*1e3 << "mm"
+         << "  gapP2="<< gapP2*1e3 << "mm"
+         << "  nv="   << Th.nv   << endl;
+
+    // ---- VTK output ----
+    string num;
+    if      (step <  10) num = "00" + step;
+    else if (step < 100) num = "0"  + step;
+    else                  num = ""   + step;
+
+    int[int] ord = [1,1,1,1,1,1,1,1];
+    savevtk(outdir + "frame_" + num + ".vtu", Th,
+            ux, uy, matfield, sigVM,
+            FImatrix, FIparticle, FIinterface, meshSz,
+            dataname="Ux Uy Material SigmaVM FIMatrix FIParticle FIInterface MeshSize",
+            order=ord);
+    {
+        ofstream pvd(outdir + "crack_gauntlet.pvd", append);
+        pvd << "  <DataSet timestep='" << step
+            << "' file='frame_" << num << ".vtu'/>" << endl;
+    }
+}
+
+// ============================================================
+// CLOSE PVD + SUMMARY
+// ============================================================
+{
+    ofstream pvd(outdir + "crack_gauntlet.pvd", append);
+    pvd << "</Collection>" << endl;
+    pvd << "</VTKFile>"    << endl;
+}
+cout << "================================================" << endl;
+cout << " dm=" << dm << "  dp=" << dp                     << endl;
+int stride = max(1, stepDone/20);
+for (int s = 0; s <= stepDone; s = s+stride)
+    cout << " s=" << s << "  N=" << Nhist[s]
+         << "  a=" << ahist[s]*1e3 << "mm"
+         << "  KI=" << KIhist[s]/1e6 << "MPa.sqrtm" << endl;
+cout << "================================================" << endl;
+if (failed)
+    cout << " FAILURE after " << Ntotal << " cycles." << endl;
+else
+    cout << " No fracture. a=" << a*1e3 << "mm  N=" << Ntotal << endl;
+cout << "================================================" << endl;
